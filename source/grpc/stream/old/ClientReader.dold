@@ -1,9 +1,9 @@
-module grpc.stream.ServerReaderWriter;
+module grpc.stream.ClientReader;
 
 import grpc.Status;
 import grpc.GrpcStream;
 
-class ServerReaderWriter(R , W)
+class ClientReader(R)
 {
     this(GrpcStream stream)
     {
@@ -13,20 +13,17 @@ class ServerReaderWriter(R , W)
     bool read(out R r)
     {
         r = new R();
-        if(stream.read(r)){
+        if (stream.read(r))
+        {
             return true;
         }
         return false;
     }
 
-
-    bool write(W w , bool option = false)
+    Status finish()
     {
-        stream.write(w , option);
-        return true;
+        return stream.finish();
     }
-
-
 
     GrpcStream stream;
 }

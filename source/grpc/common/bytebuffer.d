@@ -1,17 +1,19 @@
-module grpc.EvBuffer;
+module grpc.common.byte_buffer;
 
 import std.array;
 import std.stdio;
 
-class  EvBuffer(T) {
-    this( ulong  sz = 0){
-        _buffer = new T [sz];
+class EvBuffer(T)
+{
+    this(ulong sz = 0)
+    {
+        _buffer = new T[sz];
         _buf_sz = 0;
     }
 
 public:
 
-    void mergeBuffer ( ref T [] buf)
+    void mergeBuffer(ref T[] buf)
     {
         if (buf != null)
         {
@@ -20,56 +22,65 @@ public:
         }
     }
 
-    bool copyOutFromHead (ref T [] buf , ref const ulong len)
+    bool copyOutFromHead(ref T[] buf, ref const ulong len)
     {
         if (_buf_sz >= len && buf != null)
         {
-            buf[0 .. len] = _buffer [0 .. len];
+            buf[0 .. len] = _buffer[0 .. len];
             return true;
-        } else
+        }
+        else
         {
             return false;
         }
     }
 
-    bool drainBufferFromHead (ref const ulong len)
+    bool drainBufferFromHead(ref const ulong len)
     {
         if (_buf_sz < len)
         {
             return false;
-        } else {
+        }
+        else
+        {
             _buffer = _buffer[len .. $];
             _buf_sz -= len;
             return true;
         }
     }
 
-    bool removeBufferFromHead (ref T [] buf , ref const ulong len)
+    bool removeBufferFromHead(ref T[] buf, ref const ulong len)
     {
         if (_buf_sz < len)
         {
             return false;
-        } else {
-            buf[0 .. len] = _buffer [0 .. len];
+        }
+        else
+        {
+            buf[0 .. len] = _buffer[0 .. len];
             _buffer = _buffer[len .. $];
             _buf_sz -= len;
             return true;
         }
     }
 
-    void reset(){
-        _buffer = new T [0];
+    void reset()
+    {
+        _buffer = new T[0];
         _buf_sz = 0;
     }
 
-    ulong getBufferLength () { return this._buf_sz ;}
+    ulong getBufferLength()
+    {
+        return this._buf_sz;
+    }
 
-
-    void print () {
+    void print()
+    {
         writeln(this._buffer);
     }
 
 private:
-    T []        _buffer;
-    ulong       _buf_sz;
+    T[] _buffer;
+    ulong _buf_sz;
 }
