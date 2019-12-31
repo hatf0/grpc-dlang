@@ -1,6 +1,6 @@
 module grpc.stream.common.reader;
 
-public import grpc.stream.common.stream;
+public import grpc.stream.common;
 
 import grpc.common.status : Status;
 

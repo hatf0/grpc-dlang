@@ -31,7 +31,7 @@ import grpc.GrpcService;
 
 class GrpcStream
 {
-//    alias void delegate(ubyte[] complete) Callback;
+    alias void delegate(ubyte[] complete) Callback;
 // the use of delegates is an awful idea
 
 
@@ -63,6 +63,8 @@ class GrpcStream
     void onHeaders(Stream stream, HeadersFrame frame)
     {
     }
+
+    // parse from stream ?
 
     ubyte[] parserStream(DataFrame frame)
     {
@@ -143,6 +145,8 @@ class GrpcStream
         return parserStream(frame);
     }
 
+    //immediately write
+
     void write(IN)(IN obj, bool option = false)
     {
         ubyte compress = 0;
@@ -186,6 +190,8 @@ class GrpcStream
                 ]), true);
         _stream.data(dataFrame, new NoopCallback());
     }
+
+    /* called by the client to read from queue */
 
     bool read(OUT)(ref OUT obj)
     {

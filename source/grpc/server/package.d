@@ -4,6 +4,7 @@ import grpc.service.info;
 /* hunt lib imports */
 import hunt.http.server.HttpServer : HttpServer;
 import hunt.http.HttpRequest : HttpRequest;
+import hunt.http.HttpResponse : HttpResponse;
 import hunt.http.HttpFields;
 import hunt.http.server.HttpServerOptions : HttpServerOptions;
 import hunt.http.HttpVersion : HttpVersion;
@@ -23,6 +24,7 @@ import hunt.http.codec.http.stream;
 import std.experimental.logger;
 
 import std.conv : to;
+import grpc.stream.common;
 
 HeadersFrame endHeaderFrame(Status status, int streamId)
 {
@@ -39,7 +41,12 @@ class Server {
         private {
             HttpServerOptions options;
             class gRPCServerListener : StreamListener {
+                private {
+                    gRPCStream _stream;
+                }
+
                 override void onHeaders(Stream stream, HeadersFrame frame) {
+                    () @trusted { _stream.onHeaders(frame); }();
 
                 }
 
@@ -48,6 +55,10 @@ class Server {
                 }
 
                 override void onData(Stream stream, DataFrame frame, Callback callback) {
+                    () @trusted { tracef("onData (stream: %s, frame: %s)", stream, frame); }();
+
+                    ubyte[] data = () @trusted { return _stream.parseAndMark(frame); }();
+
 
                 }
 
@@ -70,6 +81,11 @@ class Server {
                     }();
 
                     return ret;
+                }
+
+                this(ref gRPCStream stream) @safe {
+                    () @trusted { trace("instantiated a new StreamListener"); }();
+                    _stream = stream;
                 }
             }
         }
@@ -120,6 +136,14 @@ class Server {
                 }
             }
 
+            () @trusted {
+                HttpFields fields = new HttpFields();
+                auto response = new HttpResponse(HttpVersion.HTTP_2, 200, fields);
+                auto responseHeader = new HeadersFrame(stream.getId(), response, null, false);
+                stream.headers(responseHeader, Callback.NOOP);
+            }();
+
+
             if(!matched) {
                 () @trusted { 
                     Status status = new Status(StatusCode.NOT_FOUND, "gRPC: did not find method named \"" ~ parts[1] ~ "\"");
@@ -128,7 +152,10 @@ class Server {
                 return null;
             }
 
-            return null;
+            auto client_stream = new gRPCStream(stream);
+            auto listener = new gRPCServerListener(client_stream); 
+
+            return listener;
         }
 
         override void onSettings(Session session, SettingsFrame frame) {

@@ -1,6 +1,6 @@
 module grpc.stream.common.writer;
 
-public import grpc.stream.common.stream;
+public import grpc.stream.common;
 
 import grpc.common.status;
 
