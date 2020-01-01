@@ -53,8 +53,8 @@ class Queue(T) {
         To be iterable with `foreach` loop.
     */
 
-    void notify() {
-        wait.wait();
+    bool notify(Duration timeout) {
+        return wait.wait(timeout);
     }
 
     bool empty() const {

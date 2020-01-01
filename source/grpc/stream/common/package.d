@@ -5,36 +5,38 @@ import hunt.http.codec.http.stream;
 import grpc.common.byte_buffer;
 import hunt.collection.BufferUtils;
 import std.experimental.logger;
+import grpc.common.queue;
+import google.rpc.status;
+import core.time;
 
-class Iterator(T) {
-}
+const ulong DATA_HEADER_LEN = 5;
 
 class gRPCStream : GenericStream {
     private {
-        Stream _stream;
+        __gshared Stream _stream;
         bool _ok = true;
         bool _eof = false;
-        EvBuffer!ubyte _buf; 
-        const ulong DATA_HEADER_LEN = 5;
+        __gshared Queue!(ubyte[]) _queue;
     }
 
-    @property bool ok() {
+    shared @safe @property bool ok() {
         return _ok;
     }
 
-    @property bool async() {
+    static @property bool async() {
         return true;
     }
 
-    @property bool isClosed() {
-        return _stream.isClosed();
+    shared @safe @property bool isClosed() {
+        bool closed = () @trusted {return _stream.isClosed();}();
+        return closed;
     }
 
-    void onHeaders(HeadersFrame frame) {
-
+    shared void onHeaders(HeadersFrame frame) {
     }
 
-    ubyte[] parseFrame(DataFrame frame) {
+    shared ubyte[] parseFrame(DataFrame frame) {
+        EvBuffer!ubyte _buf = new EvBuffer!ubyte();
         ubyte[] _body;
 
         if(frame !is null) {
@@ -86,7 +88,7 @@ class gRPCStream : GenericStream {
         return _body;
     }
 
-    void onReceive(DataFrame frame) {
+    shared void onReceive(DataFrame frame) {
         if(frame.isEndStream()) {
             _eof = true;
         }
@@ -94,11 +96,11 @@ class gRPCStream : GenericStream {
 
         ubyte[] _body = parseFrame(frame);
         if(_body.length != 0) {
-            trace("should add it to the list here");
+            _queue.put(_body);
         }
     }
 
-    ubyte[] parseAndMark(DataFrame frame) {
+    shared ubyte[] parseAndMark(DataFrame frame) {
         if(frame.isEndStream()) {
             tracef("frame (%s) is eof, marking", frame);
             _eof = true;
@@ -112,61 +114,119 @@ class gRPCStream : GenericStream {
         return _body;
     }
 
-    bool writeData(ubyte[] data) {
+    shared bool writeData(ubyte[] data) {
         return true;
     }
 
-    bool writeObject(T)(T obj) {
+    shared bool writeObject(T)(T obj) {
         return true;
     }
 
-    ubyte[] readData() {
+    shared ubyte[] readData(Duration timeout = 10.seconds) {
         ubyte[] buf;
+
+        tracef("waiting for data from queue");
+        if(_queue.empty()) {
+            if(!_queue.notify(timeout)) {
+                return buf;
+            }
+        }
+
+        tracef("read data (data: %s)", buf);
+
+        buf = _queue.front().dup();
+        _queue.popFront();
+
         return buf;
     }
 
-    bool readObject(T)(ref T obj) {
+    shared bool readObject(T)(ref T obj, Duration timeout = 10.seconds) {
+        ubyte[] buf = readData(timeout);
+
+        if(buf.length == 0) {
+            return false;
+        }
+
+        import google.protobuf;
+        T deserializedObject;
+
+        try {
+            deserializedObject = buf.fromProtobuf!T();
+        }
+        catch(Exception e) {
+            errorf("Deserialization fault (msg: %s)", e.msg);
+            return false;
+        }
+
+        obj = deserializedObject; 
+            
         return true;
     }
 
-    bool finish() {
+    shared bool finish(Status status) {
+        import hunt.util.Common : Callback;
+        import hunt.http.HttpFields;
+        import hunt.http.HttpMetaData : MetaData;
+        import hunt.http.HttpVersion : HttpVersion;
+        import std.conv : to;
+
+        if(isClosed()) {
+            return false;
+        }
+
+        if(status.code != 0) {
+            HttpFields end_fields = new HttpFields(2);
+            int code = status.code;
+            end_fields.add("grpc-status", to!string(code));
+            end_fields.add("grpc-message", status.message);
+            HeadersFrame frame = new HeadersFrame(_stream.getId(), new MetaData(HttpVersion.HTTP_2, end_fields), null, true); 
+            _stream.headers(frame, Callback.NOOP);
+        }
+
         return true;
+    }
+
+    @safe shared this(ref Stream stream) {
+        () @trusted {
+            _stream = stream;
+            _queue = new Queue!(ubyte[])();
+        }();
     }
 
     @safe this(ref Stream stream) {
-        _stream = stream;
-        () @trusted { _buf = new EvBuffer!ubyte(); }();
+        () @trusted {
+            _stream = stream;
+            _queue = new Queue!(ubyte[])();
+        }();
     }
 
 }
 
-
-
 interface GenericStream {
-    @property bool isClosed();
-    @property bool ok();  
-    @property bool async();
+    shared @property bool isClosed();
+    shared @property bool ok();  
+    static @property bool async();
 
-    void onHeaders(HeadersFrame frame);
+    shared void onHeaders(HeadersFrame frame);
     /* shared */
 
     /* parseFrame will read a full 'dataframe', and return it as a ubyte */
 
     /* shared */
-    ubyte[] parseFrame(DataFrame frame);
-    ubyte[] parseAndMark(DataFrame frame);
+    shared ubyte[] parseFrame(DataFrame frame);
+    shared ubyte[] parseAndMark(DataFrame frame);
 
     /* shared */
-    void onReceive(DataFrame frame);
+    shared void onReceive(DataFrame frame);
 
 
-    bool writeData(ubyte[] data);
-    bool writeObject(T)(T obj);
+    shared bool writeData(ubyte[] data);
+    shared bool writeObject(T)(T obj);
 
-    ubyte[] readData();
-    bool readObject(T)(ref T obj);
+    shared ubyte[] readData(Duration timeout);
+    shared bool readObject(T)(ref T obj, Duration timeout);
 
-    bool finish(); //finish writes
+    shared bool finish(Status status); //finish writes
 }
 
 /*

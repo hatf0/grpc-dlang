@@ -25,14 +25,20 @@ import std.experimental.logger;
 
 import std.conv : to;
 import grpc.stream.common;
+import grpc.service;
 
 HeadersFrame endHeaderFrame(Status status, int streamId)
 {
-    HttpFields end_fileds = new HttpFields(2);
+    HttpFields end_fields = new HttpFields(2);
     int code = to!int(status.errorCode());
-    end_fileds.add("grpc-status", to!string(code));
-    end_fileds.add("grpc-message", status.errorMessage());
-    return new HeadersFrame(streamId, new MetaData(HttpVersion.HTTP_2, end_fileds), null, true);
+    end_fields.add("grpc-status", to!string(code));
+    end_fields.add("grpc-message", status.errorMessage());
+    return new HeadersFrame(streamId, new MetaData(HttpVersion.HTTP_2, end_fields), null, true);
+}
+
+extern(C) void handle_sigpipe(int) {
+    // do nothing, we can safely ignore SIGPIPE because then our writes will just fail
+
 }
 
 class Server {
@@ -40,9 +46,17 @@ class Server {
     class gRPCServerSessionListener : ServerSessionListener {
         private {
             HttpServerOptions options;
+
+            /* 
+               Represents a session established with the opening of a new stream 
+               As well, this class receives all data about the stream from hunt, and then hands over/enqueues it 
+               Basically, a 'shim' layer
+             */
+
             class gRPCServerListener : StreamListener {
                 private {
-                    gRPCStream _stream;
+                    Method _method;
+                    shared(gRPCStream) _stream;
                 }
 
                 override void onHeaders(Stream stream, HeadersFrame frame) {
@@ -54,11 +68,9 @@ class Server {
                     return null;
                 }
 
-                override void onData(Stream stream, DataFrame frame, Callback callback) {
-                    () @trusted { tracef("onData (stream: %s, frame: %s)", stream, frame); }();
-
-                    ubyte[] data = () @trusted { return _stream.parseAndMark(frame); }();
-
+                override void onData(Stream stream, DataFrame frame, Callback callback) @trusted {
+                    tracef("onData (stream: %s, frame: %s)", stream, frame);
+                    _stream.onReceive(frame);
 
                 }
 
@@ -83,9 +95,21 @@ class Server {
                     return ret;
                 }
 
-                this(ref gRPCStream stream) @safe {
-                    () @trusted { trace("instantiated a new StreamListener"); }();
+                this(ref shared gRPCStream stream, Method method) @safe {
+                    () @trusted { 
+                        tracef("instantiated a new StreamListener (method: %s, service: %s)", method.name, method.service); 
+                        try {
+                            services[method.service].dispatch(method.name, stream);
+                        } catch(Exception e) {
+                            errorf("could not spawn new handler? (error: %s)", e.msg);
+                            assert(0);
+                        }
+
+                        tracef("spawned new service handler");
+                    }();
+
                     _stream = stream;
+                    _method = method;
                 }
             }
         }
@@ -152,8 +176,11 @@ class Server {
                 return null;
             }
 
-            auto client_stream = new gRPCStream(stream);
-            auto listener = new gRPCServerListener(client_stream); 
+
+            /* a gRPCServerListener represents a session that has been established */
+
+            auto client_stream = new shared(gRPCStream)(stream);
+            auto listener = new gRPCServerListener(client_stream, _method); 
 
             return listener;
         }
@@ -175,7 +202,7 @@ class Server {
         }
 
         override void onClose(Session session, GoAwayFrame frame, Callback callback) {
-
+            tracef("got close event");
         }
 
         override void onFailure(Session session, Exception failure) {
@@ -183,10 +210,12 @@ class Server {
         }
 
         override void onFailure(Session session, Exception failure, Callback callback) {
+            tracef("got fail");
 
         }
 
         override void onAccept(Session session) {
+            tracef("accepted new client");
 
         }
 
@@ -212,6 +241,7 @@ class Server {
         HttpServer _server;
         gRPCServerSessionListener _listener;
         Method[] methods;
+        ServiceHandler[string] services;
         bool s_init;
         bool s_ready;
     }
@@ -251,7 +281,7 @@ class Server {
         pragma(msg, "\tinherited from: ", fullyQualifiedName!parent);
 
         static foreach(i, val; getSymbolsByUDA!(parent, RPC)) {
-            () {
+            () @trusted {
                 Method _method;
                 enum remoteName = getUDAs!(val, RPC)[0].methodName;
                 import std.conv : to;
@@ -281,6 +311,7 @@ class Server {
                 _method.name = remoteName;
 
                 methods ~= _method; 
+                services[serviceName] = new Service!T();
             }();
         }
     }
@@ -302,6 +333,12 @@ class Server {
     }
 
     this() {
+        import core.sys.posix.signal : bsd_signal, SIGPIPE;
+        () @trusted {
+            bsd_signal(SIGPIPE, &handle_sigpipe); //a SIGPIPE will occur when the pipe has broken (i.e client has disconnected, but we continue to write)
+            // it's safe to ignore it in this case, because our write will just silently fail
+        }();
+
         s_init = true;
     }
 }
